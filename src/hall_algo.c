@@ -43,11 +43,7 @@ void jacobian(const CauchyParams *params, const data_to_fit *d, double J[3][3]) 
     double x0 = params->x0;
     double gamma = params->gamma;
 
-    for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < 3; j++) {
-            J[i][j] = 0;
-        }
-    }
+    memset(J, 0, sizeof(double) * 3 * 3);
     //calculate partial derivates
     for (size_t i = 0; i < d->n; i++) {
         double term = d->x_values[i] - x0;
@@ -68,43 +64,37 @@ void jacobian(const CauchyParams *params, const data_to_fit *d, double J[3][3]) 
 
 void levenberg_marquardt(data_to_fit *d, CauchyParams *params) {
     double lambda = 0.1; 
-    double f[3], h[3];  // f is the difference between current values and predicted cauchy
-    double J[3][3]; // Jacobian Matrix (filled with partial derivatives)
+    double *f = malloc(d->n * sizeof(double));
+    double h[3];
+    double J[3][3];
     double prev_chi_sq = DBL_MAX; 
 
     for (int iter = 0; iter < MAX_ITER; iter++) {
-
         cauchy_function_own(params, d, f);
         jacobian(params, d, J);
 
         double chi_sq = 0;
+        //calculate chi_sq
         for (size_t i = 0; i < d->n; i++) {
-            chi_sq += f[i] * f[i];  //sum of squares of residuals
+            chi_sq += f[i] * f[i];
         }
-
         // Add lambda to diagonal
         for (int i = 0; i < 3; i++) {
             J[i][i] *= (1 + lambda); 
         }
-
         // Solve J * h = -f
         for (int i = 0; i < 3; i++) {
-            h[i] = -f[i];
-            for (int j = 0; j < 3; j++) {
-                if (i != j) {
-                    h[i] -= J[i][j] * h[j] / J[j][j];
-                }
+            h[i] = 0;
+            for (size_t j = 0; j < d->n; j++) {
+                h[i] -= f[j] * (i == 0 ? 1 / J[0][0] : (i == 1 ? (d->x_values[j] - params->x0) / (params->gamma * params->gamma) : (d->x_values[j] - params->x0) * (d->x_values[j] - params->x0) / (params->gamma * params->gamma * params->gamma) - 1 / params->gamma));
             }
-            h[i] /= J[i][i];
         }
 
-        // Update parameters
         CauchyParams new_params = *params;
         new_params.A += h[0];
         new_params.x0 += h[1];
         new_params.gamma += h[2];
-
-        // Check for parameter validity, vanish
+        // Check for parameter validity, vanish 
         if (new_params.A <= 0 || new_params.gamma <= 0 || isnan(new_params.A) || isnan(new_params.x0) || isnan(new_params.gamma)) {
             lambda *= 10;
             continue;
@@ -127,49 +117,58 @@ void levenberg_marquardt(data_to_fit *d, CauchyParams *params) {
         }
 
         if (lambda > 1e10) {
-            break;  // Algorithm is not converging, exit
+            break; // Algorithm is not converging, exit
         }
 
         prev_chi_sq = chi_sq;
     }
 
+    free(f);
 }
 
-static double estimate_x0_param_own(double *data){
-  // this is the original basic computation of the x0 param
-  // imprecise but still pretty good. 
-  return -((data[0]-data[2])/data[1]); 
+static double estimate_x0_param_own(double *data, size_t len) {
+    // Use only the middle three points
+    size_t mid = len / 2;
+    double left = data[mid - 1];
+    double center = data[mid];
+    double right = data[mid + 1];
+    
+    // This is the original basic computation of the x0 param
+    // imprecise but still pretty good.
+    return -((left - right) / center);
 }
 
-double cauchy_position(int *data_t) {
-    // Prepare data
-    double x[3] = {-1.0, 0.0, 1.0};
-    double y[3] = {
-        data_t[0],
-        data_t[1],
-        data_t[2]
-    };
 
-    data_to_fit d = {3, y, x};
+double cauchy_position(int *data_t, size_t len) {
+    double *x = malloc(len * sizeof(double));
+    double *y = malloc(len * sizeof(double));
+
+    for (size_t i = 0; i < len; i++) {
+        x[i] = 2.0 * i / (len - 1) - 1;  // Map to [-1, 1]
+        y[i] = (double)data_t[i];
+    }
+
+    data_to_fit d = {len, y, x};
 
     CauchyParams params;
     //make guess
-    //A guess = B point (mid) * a multiplier, expecting the peak point of the laurentzian to be much higher. This is only inefficient if B is very close to the peak, otherwise this saves lots of iterations
-    //x0 guess = relation between outer points and B point 
+    //A guess = mid point (M) * a multiplier, expecting the peak point of the laurentzian to be much higher. This is only inefficient if the mid point is very close to the peak, otherwise this saves lots of iterations
+    //x0 guess = relation between outer points and M point 
     //gamma is just 1
-    params.A = y[1] * PARAM_A_ESTIMATE_MULTIPLIER;
-    params.x0 = estimate_x0_param_own(y);
+    params.A = y[len/2] * PARAM_A_ESTIMATE_MULTIPLIER;
+    params.x0 = estimate_x0_param_own(y, len);
     params.gamma = PARAM_gamma_ESTIMATE;
 
     levenberg_marquardt(&d, &params);
 
-    // Check if the fit was successful
     if (isnan(params.x0)) {
-        params.x0 = estimate_x0_param_own(y);
+        params.x0 = estimate_x0_param_own(y, len);
     }
 
-    return (params.x0); //x0 is a decimal between -1 and 1 (the boundaries defined in x)
+    free(x);
+    free(y);
 
+    return params.x0;
 }
 
 int main(){
@@ -198,10 +197,15 @@ calculates            x0
 in this example the x0 should be above 0 (below if data[0] was higher than data[2])
 if B and C are basically mirror points the value is expected to be close to 0.5 (right in the middle between B and C)
   */
-  int data[3] = {119, 220, 170};
+    uint8_t size = 3;
+    int data[3] = {119, 220, 170};
 
-  printf("x0 result from fit: %.2f\n", cauchy_position(data));
+    //size = 5;
+    //int data[5] = {70, 119, 220, 170, 112};
 
-  return 0;
+
+    printf("x0 result from fit: %.2f\n", cauchy_position(data, size));
+
+    return 0;
 }
 
