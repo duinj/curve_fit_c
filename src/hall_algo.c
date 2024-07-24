@@ -141,7 +141,7 @@ static double estimate_x0_param_own(double *data){
   return -((data[0]-data[2])/data[1]); 
 }
 
-int cauchy_position(int *data_t) {
+double cauchy_position(int *data_t) {
     // Prepare data
     double x[3] = {-1.0, 0.0, 1.0};
     double y[3] = {
@@ -168,19 +168,20 @@ int cauchy_position(int *data_t) {
         params.x0 = estimate_x0_param_own(y);
     }
 
-    return (int) (params.x0 * 100);
+    return (params.x0); //x0 is a decimal between -1 and 1 (the boundaries defined in x)
 
 }
 
 int main(){
-  //dummy data, this is the structure that should be used, 3 points where the B is the highest
+  //dummy data, this is the structure that should be used, 3 points where the B the highest
+  //structure could be thought of like this: -1 : A, 0 : B, 1 : C
   /*
                       .-.
                      /   \
                     /     \
                   B/       \
                   /         \
-                 /           \D
+                 /           \C
                 /             \
                /               \
               /                 \
@@ -189,15 +190,17 @@ int main(){
           A/                       \
           /                         \
          /                           \
-        /              ^               \
+        /                             \
       ./               |               \.
     .´                 |                `.
 ..´                    |                  `..
 calculates            x0
+in this example the x0 should be above 0 (below if data[0] was higher than data[2])
+if B and C are basically mirror points the value is expected to be close to 0.5 (right in the middle between B and C)
   */
   int data[3] = {119, 220, 170};
 
-  printf("x0 result from fit: %d\n", cauchy_position(data));
+  printf("x0 result from fit: %.2f\n", cauchy_position(data));
 
   return 0;
 }
